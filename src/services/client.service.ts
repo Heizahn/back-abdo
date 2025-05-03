@@ -1,0 +1,151 @@
+import {/* inject, */ BindingScope, injectable} from '@loopback/core';
+import {repository} from '@loopback/repository';
+import {HttpErrors} from '@loopback/rest';
+import mongoose from 'mongoose';
+import {Clients} from '../models';
+import {ClientsRepository} from '../repositories';
+
+@injectable({scope: BindingScope.TRANSIENT})
+export class ClientService {
+  constructor(
+    @repository(ClientsRepository)
+    public clientsRepository: ClientsRepository,
+  ) {}
+
+  async findById(id: string, providerId?: string) {
+    const ObjectId = mongoose.Types.ObjectId;
+    const collection =
+      await this.clientsRepository.dataSource.connector?.collection('Clients');
+
+    if (!ObjectId.isValid(id)) {
+      throw new HttpErrors.BadRequest('Invalid client ID format');
+    }
+
+    const baseClient = (await collection.findOne(
+      {_id: new ObjectId(id)},
+      {projection: {idOwner: 1}},
+    )) as {
+      _id: mongoose.Types.ObjectId;
+      idOwner?: mongoose.Types.ObjectId | string;
+    } | null;
+
+    if (!baseClient) {
+      throw new HttpErrors.NotFound('Cliente no encontrado');
+    }
+
+    if (providerId) {
+      const dbProviderId = baseClient.idOwner
+        ? baseClient.idOwner.toString()
+        : undefined;
+
+      if (dbProviderId !== providerId) {
+        throw new HttpErrors.Forbidden('Acceso denegado a este cliente');
+      }
+    }
+
+    const pipeline: mongoose.PipelineStage[] = [
+      {$match: {_id: new ObjectId(id)}},
+      {
+        $lookup: {
+          from: 'Plans',
+          localField: 'idSubscription',
+          foreignField: '_id',
+          as: 'plans',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Sectors',
+          localField: 'idSector',
+          foreignField: '_id',
+          as: 'sectors',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idInstaller',
+          foreignField: '_id',
+          as: 'installer',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idCreator',
+          foreignField: '_id',
+          as: 'creator',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idEditor',
+          foreignField: '_id',
+          as: 'editor',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idSuspender',
+          foreignField: '_id',
+          as: 'suspender',
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          sName: 1,
+          sDni: 1,
+          sRif: 1,
+          sPhone: 1,
+          sState: 1,
+          sIp: 1,
+          sSn: 1,
+          sMac: 1,
+          sType: 1,
+          nPayment: 1,
+          nBalance: 1,
+          sAddress: 1,
+          sCommentary: 1,
+          idSubscription: 1,
+          idSector: 1,
+          dCreation: 1,
+          dSuspension: 1,
+          dEdition: 1,
+          creator: {$arrayElemAt: ['$creator.sName', 0]},
+          editor: {$arrayElemAt: ['$editor.sName', 0]},
+          installer: {$arrayElemAt: ['$installer.sName', 0]},
+          suspender: {$arrayElemAt: ['$suspender.sName', 0]},
+          plan: {$arrayElemAt: ['$plans.sName', 0]},
+          nMBPS: {$arrayElemAt: ['$plans.nMBPS', 0]},
+          sector: {$arrayElemAt: ['$sectors.sName', 0]},
+        },
+      },
+    ];
+
+    const client = await collection.aggregate(pipeline).toArray();
+    if (!client) {
+      throw new HttpErrors.NotFound('Client not found');
+    }
+
+    return client[0];
+  }
+
+  async updateById(id: string, client: Partial<Clients>) {
+    const ObjectId = mongoose.Types.ObjectId;
+
+    if (!ObjectId.isValid(id)) {
+      throw new HttpErrors.BadRequest('Identificador de cliente invalido');
+    }
+
+    await this.clientsRepository.updateById(id, client);
+
+    return {
+      status: 'success',
+      message: 'Cliente actualizado correctamente',
+    };
+  }
+}
