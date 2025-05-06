@@ -119,7 +119,7 @@ export class ClientsService {
           plan: {$arrayElemAt: ['$plans.sName', 0]},
           nMBPS: {$arrayElemAt: ['$plans.nMBPS', 0]},
           nPayment: 1,
-          sBalance: 1,
+          nBalance: 1,
           sState: 1,
         },
       },

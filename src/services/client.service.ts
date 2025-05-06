@@ -1,15 +1,19 @@
-import {/* inject, */ BindingScope, injectable} from '@loopback/core';
+import {BindingScope, Getter, inject, injectable} from '@loopback/core';
 import {repository} from '@loopback/repository';
 import {HttpErrors} from '@loopback/rest';
 import mongoose from 'mongoose';
 import {Clients} from '../models';
 import {ClientsRepository} from '../repositories';
+import {DebtsService} from './debts.service';
 
 @injectable({scope: BindingScope.TRANSIENT})
 export class ClientService {
   constructor(
     @repository(ClientsRepository)
     public clientsRepository: ClientsRepository,
+
+    @inject.getter('services.DebtsService')
+    private debtsService: Getter<DebtsService>,
   ) {}
 
   async findById(id: string, providerId?: string) {
@@ -147,5 +151,20 @@ export class ClientService {
       status: 'success',
       message: 'Cliente actualizado correctamente',
     };
+  }
+
+  async updateBalance(id: string) {
+    const debtsService = await this.debtsService();
+    const debts = await debtsService.findByClientId(id);
+
+    let totalDebt = 0;
+
+    for (const debt of debts) {
+      totalDebt -= debt.debt;
+    }
+
+    await this.clientsRepository.updateById(id, {
+      nBalance: totalDebt,
+    });
   }
 }
