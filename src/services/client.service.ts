@@ -129,6 +129,7 @@ export class ClientService {
         },
       },
     ];
+    await this.updateBalance(id);
 
     const client = await collection.aggregate(pipeline).toArray();
     if (!client) {
@@ -154,17 +155,29 @@ export class ClientService {
   }
 
   async updateBalance(id: string) {
-    const debtsService = await this.debtsService();
-    const debts = await debtsService.findByClientId(id);
+    const ObjectId = mongoose.Types.ObjectId;
+    const debts = await this.clientsRepository.dataSource.connector
+      ?.collection('Debts')
+      .find({idClient: new ObjectId(id), sState: 'Activo'})
+      .toArray();
+
+    const payments = await this.clientsRepository.dataSource.connector
+      ?.collection('Payments')
+      .find({idClient: new ObjectId(id), sState: 'Activo'})
+      .toArray();
 
     let totalDebt = 0;
 
     for (const debt of debts) {
-      totalDebt -= debt.debt;
+      totalDebt -= debt.nAmount;
+    }
+
+    for (const payment of payments) {
+      totalDebt += payment.nAmount;
     }
 
     await this.clientsRepository.updateById(id, {
-      nBalance: totalDebt,
+      nBalance: parseFloat(totalDebt.toFixed(2)),
     });
   }
 }

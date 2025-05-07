@@ -18,6 +18,120 @@ export class DebtsService {
   async create(debt: Omit<Debts, 'id'>) {
     try {
       const newDebt = await this.debtsRepository.create(debt);
+      console.log('Nueva deuda creada:', newDebt);
+
+      const clientId = new mongoose.Types.ObjectId(debt.idClient);
+      console.log('ID del cliente convertido a ObjectId:', clientId);
+
+      // Verificar pagos básicos
+      const basicPayments = await this.debtsRepository.dataSource.connector
+        ?.collection('Payments')
+        .find({
+          idClient: clientId,
+          sState: 'Activo',
+        })
+        .toArray();
+
+      console.log(
+        'Pagos básicos encontrados:',
+        JSON.stringify(basicPayments, null, 2),
+      );
+
+      // Verificar partes de pago existentes
+      const existingPartPayments =
+        await this.debtsRepository.dataSource.connector
+          ?.collection('PartPayments')
+          .find({
+            idPayment: {
+              $in: basicPayments.map(
+                (p: {_id: mongoose.Types.ObjectId}) => p._id,
+              ),
+            },
+          })
+          .toArray();
+
+      console.log(
+        'Partes de pago existentes:',
+        JSON.stringify(existingPartPayments, null, 2),
+      );
+
+      // Procesar los pagos y crear partes de pago
+      if (basicPayments && basicPayments.length > 0) {
+        console.log('Procesando pagos disponibles...');
+        const partPaymentsCollection =
+          this.debtsRepository.dataSource.connector?.collection('PartPayments');
+
+        const remainingDebt = debt.nAmount;
+        console.log('Monto de la deuda a cubrir:', remainingDebt);
+
+        // Solo crear partes de pago si la deuda pendiente es mayor a 0
+        if (remainingDebt > 0) {
+          for (const payment of basicPayments) {
+            if (remainingDebt <= 0) {
+              console.log(
+                'Deuda completamente cubierta, no se necesitan más pagos',
+              );
+              break;
+            }
+
+            // Calcular el total de partes de pago para este pago
+            const paymentParts = existingPartPayments.filter(
+              (pp: {idPayment: mongoose.Types.ObjectId}) =>
+                pp.idPayment.toString() === payment._id.toString(),
+            );
+            const totalPartPayments = paymentParts.reduce(
+              (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
+              0,
+            );
+
+            // Calcular el pendiente real de la deuda ANTES de crear la parte de pago
+            const debtParts = await partPaymentsCollection
+              .find({idDebt: newDebt.id})
+              .toArray();
+            const totalDebtParts = debtParts.reduce(
+              (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
+              0,
+            );
+            const pendiente = debt.nAmount - totalDebtParts;
+            console.log('Pendiente real de la deuda:', pendiente);
+            if (pendiente <= 0) {
+              console.log(
+                'La deuda ya está completamente pagada, no se crean más partes de pago.',
+              );
+              break;
+            }
+
+            console.log('Procesando pago:', JSON.stringify(payment, null, 2));
+            console.log(
+              'Partes de pago para este pago:',
+              JSON.stringify(paymentParts, null, 2),
+            );
+            console.log('Total de partes de pago:', totalPartPayments);
+
+            const availableAmount = payment.nAmount - totalPartPayments;
+            console.log('Monto disponible en el pago:', availableAmount);
+
+            // Solo crear parte de pago si hay monto disponible y la deuda pendiente es mayor a 0
+            if (availableAmount > 0 && pendiente > 0) {
+              const amountToUse = Math.min(availableAmount, pendiente);
+              if (amountToUse > 0 && amountToUse <= pendiente) {
+                await partPaymentsCollection?.insertOne({
+                  idDebt: newDebt.id,
+                  idPayment: payment._id,
+                  nAmount: amountToUse,
+                });
+                console.log('Parte de pago creada por:', amountToUse);
+              }
+            }
+          }
+        } else {
+          console.log(
+            'La deuda ya está en cero o menor, no se crean partes de pago.',
+          );
+        }
+      } else {
+        console.log('No hay pagos disponibles para procesar');
+      }
 
       const clientService = await this.clientService();
       await clientService.updateBalance(debt.idClient);
@@ -90,10 +204,7 @@ export class DebtsService {
             {
               $match: {
                 $expr: {
-                  $and: [
-                    {$eq: ['$idDebt', '$$idDebt']},
-                    {$eq: ['$sState', 'Activo']},
-                  ],
+                  $and: [{$eq: ['$idDebt', '$$idDebt']}],
                 },
               },
             },
@@ -134,5 +245,63 @@ export class DebtsService {
       .aggregate(pipeline)
       .toArray();
     return debts;
+  }
+
+  async listDebts(idClient?: string) {
+    const pipeline: mongoose.PipelineStage[] = [
+      {
+        $match: {
+          sState: 'Activo',
+          idClient: new mongoose.Types.ObjectId(idClient),
+        },
+      },
+      {
+        $lookup: {
+          from: 'PartPayments',
+          let: {
+            idDebt: '$_id',
+          },
+          as: 'partPayments',
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [{$eq: ['$idDebt', '$$idDebt']}],
+                },
+              },
+            },
+          ],
+        },
+      },
+      {
+        $addFields: {
+          debt: {
+            $cond: [
+              {$eq: ['$sState', 'Activo']},
+              {$subtract: ['$nAmount', {$sum: '$partPayments.nAmount'}]},
+              0,
+            ],
+          },
+        },
+      },
+
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          sReason: 1,
+          debt: 1,
+        },
+      },
+    ];
+
+    const debts = await this.debtsRepository.dataSource.connector
+      ?.collection('Debts')
+      .aggregate(pipeline)
+      .toArray();
+
+    const debtsFiltered = debts.filter((debt: {debt: number}) => debt.debt > 0);
+
+    return debtsFiltered;
   }
 }

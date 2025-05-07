@@ -4,3 +4,4 @@ export * from './sectors.model';
 export * from './plans.model';
 export * from './debts.model';
 export * from './partpayments.model';
+export * from './payments.model';

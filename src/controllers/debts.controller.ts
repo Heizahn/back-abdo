@@ -109,4 +109,15 @@ export class DebtsController {
   ) {
     return this.debtsService.update(id, debt);
   }
+
+  @get('/debts/client/list/{id}')
+  @response(200, {
+    description: 'List of debts',
+    content: {
+      'application/json': {schema: getModelSchemaRef(Debts)},
+    },
+  })
+  async listDebts(@param.path.string('id') id: string) {
+    return this.debtsService.listDebts(id);
+  }
 }

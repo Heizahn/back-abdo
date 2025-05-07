@@ -4,3 +4,4 @@ export * from './plans.repository';
 export * from './sectors.repository';
 export * from './debts.repository';
 export * from './partpayments.repository';
+export * from './payments.repository';
