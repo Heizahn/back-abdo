@@ -7,9 +7,14 @@ import {
 import {repository} from '@loopback/repository';
 import {HttpErrors} from '@loopback/rest';
 import mongoose from 'mongoose';
-import {Payments} from '../models';
-import {PaymentsRepository} from '../repositories';
+import {Payments} from '../models/payments.model';
+import {PaymentsRepository} from '../repositories/payments.repository';
 import {ClientService} from './client.service';
+
+interface PaymentWithAmount extends Omit<Payments, 'nAmount' | 'nBs'> {
+  nAmount: number;
+  nBs: number;
+}
 
 @injectable({scope: BindingScope.TRANSIENT})
 export class PaymentsService {
@@ -20,6 +25,11 @@ export class PaymentsService {
     @inject.getter('services.ClientService')
     private clientService: Getter<ClientService>,
   ) {}
+
+  // Función auxiliar para redondear a 2 decimales
+  private roundToTwoDecimals(num: number): number {
+    return parseFloat(num.toFixed(2));
+  }
 
   async findByClientId(id: string) {
     const pipeline: mongoose.PipelineStage[] = [
@@ -60,7 +70,10 @@ export class PaymentsService {
             {
               $match: {
                 $expr: {
-                  $in: ['$_id', '$$partPaymentDebtIds'],
+                  $and: [
+                    {$in: ['$_id', '$$partPaymentDebtIds']},
+                    {$eq: ['$sState', 'Activo']},
+                  ],
                 },
               },
             },
@@ -86,27 +99,23 @@ export class PaymentsService {
           editor: {$arrayElemAt: ['$editor.sName', 0]},
           sReason: {
             $cond: {
-              if: {$eq: ['$partPayments', []]}, // Condición: Si el array partPayments está vacío
-              then: 'Abono', // Si es verdadero (no hay partes de pago), el sReason es "Abono"
+              if: {$eq: ['$partPayments', []]},
+              then: 'Abono',
               else: {
-                // Si es falso (hay partes de pago)
-                // Combinar las razones de las deudas encontradas (viene de relatedDebtsInfo)
-                // La lógica para combinar razones es la misma que antes
                 $reduce: {
-                  input: '$relatedDebtsInfo.sReason', // Array de sReason de las deudas relacionadas
-                  initialValue: '', // Empieza con un string vacío
+                  input: '$relatedDebtsInfo.sReason',
+                  initialValue: '',
                   in: {
                     $cond: {
-                      if: {$eq: ['$$value', '']}, // Si es el primer elemento
-                      then: '$$this', // Usa la razón directamente
-                      else: {$concat: ['$$value', ', ', '$$this']}, // Si no, concatena con ", " y la razón actual
+                      if: {$eq: ['$$value', '']},
+                      then: '$$this',
+                      else: {$concat: ['$$value', ', ', '$$this']},
                     },
                   },
                 },
               },
             },
           },
-
           dCreation: 1,
           dEdition: 1,
           bUSD: 1,
@@ -116,10 +125,16 @@ export class PaymentsService {
       },
     ];
 
-    return this.paymentsRepository.dataSource.connector
+    const payments = await this.paymentsRepository.dataSource.connector
       ?.collection('Payments')
       .aggregate(pipeline)
       .toArray();
+
+    return payments.map((payment: PaymentWithAmount) => ({
+      ...payment,
+      nAmount: this.roundToTwoDecimals(payment.nAmount),
+      nBs: this.roundToTwoDecimals(payment.nBs),
+    }));
   }
 
   async createPayment(paymentData: Partial<Payments>, idDebt?: string) {
@@ -134,6 +149,12 @@ export class PaymentsService {
 
       if (!paymentData.idCreator) {
         throw new HttpErrors.BadRequest('El ID del creador es requerido');
+      }
+
+      // Redondear los montos
+      paymentData.nAmount = this.roundToTwoDecimals(paymentData.nAmount);
+      if (paymentData.nBs) {
+        paymentData.nBs = this.roundToTwoDecimals(paymentData.nBs);
       }
 
       const ObjectId = mongoose.Types.ObjectId;
@@ -185,7 +206,9 @@ export class PaymentsService {
           (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
           0,
         );
-        const pendiente = debt.nAmount - totalPartPayments;
+        const pendiente = this.roundToTwoDecimals(
+          debt.nAmount - totalPartPayments,
+        );
         console.log(
           'Pendiente real de la deuda:',
           pendiente,
@@ -197,7 +220,9 @@ export class PaymentsService {
         );
 
         if (pendiente > 0) {
-          const amountToUse = Math.min(remainingAmount, pendiente);
+          const amountToUse = this.roundToTwoDecimals(
+            Math.min(remainingAmount, pendiente),
+          );
           if (amountToUse > 0) {
             await partPaymentsCollection.insertOne({
               idDebt: new ObjectId(idDebt),
@@ -209,7 +234,9 @@ export class PaymentsService {
               idPayment: paymentCreated.id,
               nAmount: amountToUse,
             });
-            remainingAmount -= amountToUse;
+            remainingAmount = this.roundToTwoDecimals(
+              remainingAmount - amountToUse,
+            );
           }
         } else {
           console.log(
@@ -254,7 +281,9 @@ export class PaymentsService {
             (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
             0,
           );
-          const pendiente = debt.nAmount - totalPartPayments;
+          const pendiente = this.roundToTwoDecimals(
+            debt.nAmount - totalPartPayments,
+          );
           console.log(
             'Pendiente real de la deuda',
             debt._id,
@@ -276,7 +305,9 @@ export class PaymentsService {
             continue;
           }
 
-          const amountToUse = Math.min(remainingAmount, pendiente);
+          const amountToUse = this.roundToTwoDecimals(
+            Math.min(remainingAmount, pendiente),
+          );
           if (amountToUse > 0) {
             await partPaymentsCollection.insertOne({
               idDebt: debt._id,
@@ -288,7 +319,9 @@ export class PaymentsService {
               idPayment: paymentCreated.id,
               nAmount: amountToUse,
             });
-            remainingAmount -= amountToUse;
+            remainingAmount = this.roundToTwoDecimals(
+              remainingAmount - amountToUse,
+            );
           }
         }
       }

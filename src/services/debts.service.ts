@@ -5,6 +5,11 @@ import mongoose from 'mongoose';
 import {Debts} from '../models/debts.model';
 import {DebtsRepository} from '../repositories/debts.repository';
 import {ClientService} from './client.service';
+
+interface DebtWithDebt extends Debts {
+  debt: number;
+}
+
 @injectable({scope: BindingScope.TRANSIENT})
 export class DebtsService {
   constructor(
@@ -15,8 +20,16 @@ export class DebtsService {
     private clientService: Getter<ClientService>,
   ) {}
 
+  // Función auxiliar para redondear a 2 decimales
+  private roundToTwoDecimals(num: number): number {
+    return parseFloat(num.toFixed(2));
+  }
+
   async create(debt: Omit<Debts, 'id'>) {
     try {
+      // Redondear el monto de la deuda
+      debt.nAmount = this.roundToTwoDecimals(debt.nAmount);
+
       const newDebt = await this.debtsRepository.create(debt);
       console.log('Nueva deuda creada:', newDebt);
 
@@ -30,6 +43,7 @@ export class DebtsService {
           idClient: clientId,
           sState: 'Activo',
         })
+        .sort({dCreation: 1})
         .toArray();
 
       console.log(
@@ -37,21 +51,34 @@ export class DebtsService {
         JSON.stringify(basicPayments, null, 2),
       );
 
-      // Verificar partes de pago existentes
+      // Verificar partes de pago existentes SOLO de deudas activas
       const existingPartPayments =
         await this.debtsRepository.dataSource.connector
           ?.collection('PartPayments')
-          .find({
-            idPayment: {
-              $in: basicPayments.map(
-                (p: {_id: mongoose.Types.ObjectId}) => p._id,
-              ),
+          .aggregate([
+            {
+              $lookup: {
+                from: 'Debts',
+                localField: 'idDebt',
+                foreignField: '_id',
+                as: 'debt',
+              },
             },
-          })
+            {
+              $match: {
+                'debt.sState': 'Activo',
+                idPayment: {
+                  $in: basicPayments.map(
+                    (p: {_id: mongoose.Types.ObjectId}) => p._id,
+                  ),
+                },
+              },
+            },
+          ])
           .toArray();
 
       console.log(
-        'Partes de pago existentes:',
+        'Partes de pago existentes (solo de deudas activas):',
         JSON.stringify(existingPartPayments, null, 2),
       );
 
@@ -84,6 +111,16 @@ export class DebtsService {
               0,
             );
 
+            console.log('Pago actual:', JSON.stringify(payment, null, 2));
+            console.log(
+              'Partes de pago para este pago:',
+              JSON.stringify(paymentParts, null, 2),
+            );
+            console.log(
+              'Total de partes de pago para este pago:',
+              totalPartPayments,
+            );
+
             // Calcular el pendiente real de la deuda ANTES de crear la parte de pago
             const debtParts = await partPaymentsCollection
               .find({idDebt: newDebt.id})
@@ -92,7 +129,9 @@ export class DebtsService {
               (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
               0,
             );
-            const pendiente = debt.nAmount - totalDebtParts;
+            const pendiente = this.roundToTwoDecimals(
+              debt.nAmount - totalDebtParts,
+            );
             console.log('Pendiente real de la deuda:', pendiente);
             if (pendiente <= 0) {
               console.log(
@@ -101,19 +140,16 @@ export class DebtsService {
               break;
             }
 
-            console.log('Procesando pago:', JSON.stringify(payment, null, 2));
-            console.log(
-              'Partes de pago para este pago:',
-              JSON.stringify(paymentParts, null, 2),
+            const availableAmount = this.roundToTwoDecimals(
+              payment.nAmount - totalPartPayments,
             );
-            console.log('Total de partes de pago:', totalPartPayments);
-
-            const availableAmount = payment.nAmount - totalPartPayments;
             console.log('Monto disponible en el pago:', availableAmount);
 
             // Solo crear parte de pago si hay monto disponible y la deuda pendiente es mayor a 0
             if (availableAmount > 0 && pendiente > 0) {
-              const amountToUse = Math.min(availableAmount, pendiente);
+              const amountToUse = this.roundToTwoDecimals(
+                Math.min(availableAmount, pendiente),
+              );
               if (amountToUse > 0 && amountToUse <= pendiente) {
                 await partPaymentsCollection?.insertOne({
                   idDebt: newDebt.id,
@@ -244,7 +280,11 @@ export class DebtsService {
       ?.collection('Debts')
       .aggregate(pipeline)
       .toArray();
-    return debts;
+
+    return debts.map((debt: DebtWithDebt) => ({
+      ...debt,
+      debt: this.roundToTwoDecimals(debt.debt),
+    }));
   }
 
   async listDebts(idClient?: string) {
@@ -284,7 +324,11 @@ export class DebtsService {
           },
         },
       },
-
+      {
+        $sort: {
+          dCreation: 1,
+        },
+      },
       {
         $project: {
           _id: 0,
@@ -302,6 +346,9 @@ export class DebtsService {
 
     const debtsFiltered = debts.filter((debt: {debt: number}) => debt.debt > 0);
 
-    return debtsFiltered;
+    return debtsFiltered.map((debt: DebtWithDebt) => ({
+      ...debt,
+      debt: this.roundToTwoDecimals(debt.debt),
+    }));
   }
 }
