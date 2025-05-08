@@ -211,4 +211,23 @@ export class ClientsController {
   ) {
     return this.clientService.withdrawClient(id, client.idEditor, idOwner);
   }
+
+  @get('/clients/search/{term}')
+  @response(200, {
+    description: 'Array of Clients model instances',
+    content: {
+      'application/json': {
+        schema: {
+          type: 'array',
+          items: getModelSchemaRef(Clients, {includeRelations: true}),
+        },
+      },
+    },
+  })
+  async search(
+    @param.path.string('term') term: string,
+    @param.query.string('idOwner', {required: false}) idOwner?: string,
+  ) {
+    return this.clientsService.findClientByTerm(term, idOwner);
+  }
 }
