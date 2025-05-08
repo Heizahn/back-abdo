@@ -65,8 +65,17 @@ export class DebtsService {
               },
             },
             {
+              $lookup: {
+                from: 'Payments',
+                localField: 'idPayment',
+                foreignField: '_id',
+                as: 'payment',
+              },
+            },
+            {
               $match: {
                 'debt.sState': 'Activo',
+                'payment.sState': 'Activo',
                 idPayment: {
                   $in: basicPayments.map(
                     (p: {_id: mongoose.Types.ObjectId}) => p._id,
@@ -78,7 +87,7 @@ export class DebtsService {
           .toArray();
 
       console.log(
-        'Partes de pago existentes (solo de deudas activas):',
+        'Partes de pago existentes (solo de deudas activas y pagos activos):',
         JSON.stringify(existingPartPayments, null, 2),
       );
 
@@ -123,8 +132,28 @@ export class DebtsService {
 
             // Calcular el pendiente real de la deuda ANTES de crear la parte de pago
             const debtParts = await partPaymentsCollection
-              .find({idDebt: newDebt.id})
+              .aggregate([
+                {
+                  $match: {
+                    idDebt: newDebt.id,
+                  },
+                },
+                {
+                  $lookup: {
+                    from: 'Payments',
+                    localField: 'idPayment',
+                    foreignField: '_id',
+                    as: 'payment',
+                  },
+                },
+                {
+                  $match: {
+                    'payment.sState': 'Activo',
+                  },
+                },
+              ])
               .toArray();
+
             const totalDebtParts = debtParts.reduce(
               (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
               0,
@@ -244,6 +273,19 @@ export class DebtsService {
                 },
               },
             },
+            {
+              $lookup: {
+                from: 'Payments',
+                localField: 'idPayment',
+                foreignField: '_id',
+                as: 'payment',
+              },
+            },
+            {
+              $match: {
+                'payment.sState': 'Activo',
+              },
+            },
           ],
         },
       },
@@ -308,6 +350,19 @@ export class DebtsService {
                 $expr: {
                   $and: [{$eq: ['$idDebt', '$$idDebt']}],
                 },
+              },
+            },
+            {
+              $lookup: {
+                from: 'Payments',
+                localField: 'idPayment',
+                foreignField: '_id',
+                as: 'payment',
+              },
+            },
+            {
+              $match: {
+                'payment.sState': 'Activo',
               },
             },
           ],

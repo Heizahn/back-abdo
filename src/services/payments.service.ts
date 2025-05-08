@@ -65,14 +65,22 @@ export class PaymentsService {
       {
         $lookup: {
           from: 'Debts',
-          let: {partPaymentDebtIds: '$partPayments.idDebt'},
+          let: {
+            partPaymentDebtIds: '$partPayments.idDebt',
+            paymentState: '$sState',
+          },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $and: [
                     {$in: ['$_id', '$$partPaymentDebtIds']},
-                    {$eq: ['$sState', 'Activo']},
+                    {
+                      $or: [
+                        {$eq: ['$$paymentState', 'Anulado']},
+                        {$eq: ['$sState', 'Activo']},
+                      ],
+                    },
                   ],
                 },
               },
@@ -81,6 +89,7 @@ export class PaymentsService {
               $project: {
                 _id: 1,
                 sReason: 1,
+                sState: 1,
               },
             },
           ],
@@ -100,19 +109,33 @@ export class PaymentsService {
           sReason: {
             $cond: {
               if: {$eq: ['$partPayments', []]},
-              then: 'Abono',
+              then: {
+                $concat: [
+                  'Abono',
+                  {
+                    $cond: [{$eq: ['$sState', 'Anulado']}, ' (Anulado)', ''],
+                  },
+                ],
+              },
               else: {
-                $reduce: {
-                  input: '$relatedDebtsInfo.sReason',
-                  initialValue: '',
-                  in: {
-                    $cond: {
-                      if: {$eq: ['$$value', '']},
-                      then: '$$this',
-                      else: {$concat: ['$$value', ', ', '$$this']},
+                $concat: [
+                  {
+                    $reduce: {
+                      input: '$relatedDebtsInfo.sReason',
+                      initialValue: '',
+                      in: {
+                        $cond: {
+                          if: {$eq: ['$$value', '']},
+                          then: '$$this',
+                          else: {$concat: ['$$value', ', ', '$$this']},
+                        },
+                      },
                     },
                   },
-                },
+                  {
+                    $cond: [{$eq: ['$sState', 'Anulado']}, ' (Anulado)', ''],
+                  },
+                ],
               },
             },
           },
@@ -182,150 +205,183 @@ export class PaymentsService {
       });
       console.log('Pago creado:', paymentCreated);
 
-      let remainingAmount = paymentData.nAmount;
       const clientId = new ObjectId(paymentData.idClient);
 
-      if (idDebt) {
-        // Buscar la deuda específica
-        const debt = await debtsCollection.findOne({
-          _id: new ObjectId(idDebt),
-          sState: 'Activo',
-        });
-        console.log('Deuda encontrada:', debt);
-        if (!debt) {
-          throw new HttpErrors.NotFound('Deuda no encontrada o no activa');
+      // Función recursiva para procesar pagos
+      const processPayment = async (
+        amount: number,
+        debtId?: string,
+      ): Promise<number> => {
+        console.log(
+          `Procesando pago, monto restante: ${amount}, idDebt: ${debtId ?? 'no especificado'}`,
+        );
+
+        // Si no queda monto por asignar, terminamos
+        if (amount <= 0) {
+          console.log('No queda monto por asignar, finalizando proceso');
+          return 0;
         }
 
-        // Calcular saldo pendiente REAL antes de crear la parte de pago
+        let debtToProcess;
+
+        // Si se especificó un ID de deuda, buscamos esa deuda específica
+        if (debtId) {
+          debtToProcess = await debtsCollection.findOne({
+            _id: new ObjectId(debtId),
+            sState: 'Activo',
+          });
+
+          if (!debtToProcess) {
+            console.log(
+              `Deuda con ID ${debtId} no encontrada o no activa, buscando la siguiente más antigua`,
+            );
+            // Si no se encuentra la deuda especificada, continuamos con la siguiente más antigua
+            debtId = undefined;
+          }
+        }
+
+        // Si no se especificó ID o no se encontró la deuda especificada, buscamos la más antigua con pendiente
+        if (!debtId) {
+          const oldestDebt = await debtsCollection
+            .aggregate([
+              {$match: {idClient: clientId, sState: 'Activo'}},
+              {
+                $lookup: {
+                  from: 'PartPayments',
+                  let: {debtId: '$_id'},
+                  pipeline: [
+                    {
+                      $match: {
+                        $expr: {$eq: ['$idDebt', '$$debtId']},
+                      },
+                    },
+                    {
+                      $lookup: {
+                        from: 'Payments',
+                        localField: 'idPayment',
+                        foreignField: '_id',
+                        as: 'payment',
+                      },
+                    },
+                    {
+                      $match: {
+                        'payment.sState': 'Activo',
+                      },
+                    },
+                  ],
+                  as: 'partPayments',
+                },
+              },
+              {
+                $addFields: {
+                  totalPartPayments: {$sum: '$partPayments.nAmount'},
+                  pending: {
+                    $subtract: ['$nAmount', {$sum: '$partPayments.nAmount'}],
+                  },
+                },
+              },
+              {$match: {pending: {$gt: 0}}},
+              {$sort: {dCreation: 1}},
+              {$limit: 1},
+            ])
+            .toArray();
+
+          if (oldestDebt.length === 0) {
+            console.log('No se encontraron deudas activas con pendiente');
+            return amount; // Devolvemos el monto restante sin cambios
+          }
+
+          debtToProcess = oldestDebt[0];
+        }
+
+        // Calculamos el pendiente real de la deuda
         const partPayments = await partPaymentsCollection
-          .find({idDebt: new ObjectId(idDebt)})
+          .aggregate([
+            {
+              $match: {
+                idDebt: debtToProcess._id,
+              },
+            },
+            {
+              $lookup: {
+                from: 'Payments',
+                localField: 'idPayment',
+                foreignField: '_id',
+                as: 'payment',
+              },
+            },
+            {
+              $match: {
+                'payment.sState': 'Activo',
+              },
+            },
+          ])
           .toArray();
-        console.log('Partes de pago existentes para esta deuda:', partPayments);
 
         const totalPartPayments = partPayments.reduce(
           (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
           0,
         );
+
         const pendiente = this.roundToTwoDecimals(
-          debt.nAmount - totalPartPayments,
+          debtToProcess.nAmount - totalPartPayments,
         );
+
         console.log(
-          'Pendiente real de la deuda:',
-          pendiente,
-          '(Monto deuda:',
-          debt.nAmount,
-          '- Total partes de pago:',
-          totalPartPayments,
-          ')',
+          `Pendiente real de la deuda ${debtToProcess._id}: ${pendiente}`,
+          `(Monto deuda: ${debtToProcess.nAmount}`,
+          `- Total partes de pago activas: ${totalPartPayments})`,
         );
 
-        if (pendiente > 0) {
-          const amountToUse = this.roundToTwoDecimals(
-            Math.min(remainingAmount, pendiente),
-          );
-          if (amountToUse > 0) {
-            await partPaymentsCollection.insertOne({
-              idDebt: new ObjectId(idDebt),
-              idPayment: paymentCreated.id,
-              nAmount: amountToUse,
-            });
-            console.log('Parte de pago creada:', {
-              idDebt: new ObjectId(idDebt),
-              idPayment: paymentCreated.id,
-              nAmount: amountToUse,
-            });
-            remainingAmount = this.roundToTwoDecimals(
-              remainingAmount - amountToUse,
-            );
-          }
-        } else {
+        // Si no hay pendiente, pasamos a la siguiente deuda
+        if (pendiente <= 0) {
           console.log(
-            'No se crea parte de pago porque la deuda ya está pagada o no tiene pendiente.',
+            `La deuda ${debtToProcess._id} ya está pagada, buscando siguiente`,
           );
+          return processPayment(amount); // Llamada recursiva sin especificar ID
         }
-      } else {
-        // Buscar todas las deudas activas con saldo pendiente
-        const debts = await debtsCollection
-          .aggregate([
-            {$match: {idClient: clientId, sState: 'Activo'}},
-            {
-              $lookup: {
-                from: 'PartPayments',
-                localField: '_id',
-                foreignField: 'idDebt',
-                as: 'partPayments',
-              },
-            },
-            {
-              $addFields: {
-                totalPartPayments: {$sum: '$partPayments.nAmount'},
-                pending: {
-                  $subtract: ['$nAmount', {$sum: '$partPayments.nAmount'}],
-                },
-              },
-            },
-            {$match: {pending: {$gt: 0}}},
-            {$sort: {dCreation: 1}},
-          ])
-          .toArray();
-        console.log('Deudas activas con pendiente:', debts);
 
-        for (const debt of debts) {
-          if (remainingAmount <= 0) break;
+        // Calculamos cuánto asignar a esta deuda
+        const amountToUse = this.roundToTwoDecimals(
+          Math.min(amount, pendiente),
+        );
 
-          // Calcular pendiente real de la deuda antes de crear la parte de pago
-          const partPayments = await partPaymentsCollection
-            .find({idDebt: debt._id})
-            .toArray();
-          const totalPartPayments = partPayments.reduce(
-            (sum: number, pp: {nAmount: number}) => sum + pp.nAmount,
-            0,
-          );
-          const pendiente = this.roundToTwoDecimals(
-            debt.nAmount - totalPartPayments,
-          );
+        // Creamos la parte de pago
+        if (amountToUse > 0) {
+          await partPaymentsCollection.insertOne({
+            idDebt: debtToProcess._id,
+            idPayment: paymentCreated.id,
+            nAmount: amountToUse,
+          });
+
           console.log(
-            'Pendiente real de la deuda',
-            debt._id,
-            ':',
-            pendiente,
-            '(Monto deuda:',
-            debt.nAmount,
-            '- Total partes de pago:',
-            totalPartPayments,
-            ')',
+            `Parte de pago creada: idDebt=${debtToProcess._id}, amount=${amountToUse}`,
           );
 
-          if (pendiente <= 0) {
-            console.log(
-              'No se crea parte de pago para deuda',
-              debt._id,
-              'porque ya está pagada.',
-            );
-            continue;
-          }
-
-          const amountToUse = this.roundToTwoDecimals(
-            Math.min(remainingAmount, pendiente),
+          // Reducimos el monto restante
+          const newRemainingAmount = this.roundToTwoDecimals(
+            amount - amountToUse,
           );
-          if (amountToUse > 0) {
-            await partPaymentsCollection.insertOne({
-              idDebt: debt._id,
-              idPayment: paymentCreated.id,
-              nAmount: amountToUse,
-            });
-            console.log('Parte de pago creada:', {
-              idDebt: debt._id,
-              idPayment: paymentCreated.id,
-              nAmount: amountToUse,
-            });
-            remainingAmount = this.roundToTwoDecimals(
-              remainingAmount - amountToUse,
-            );
+
+          // Si todavía queda monto por asignar, continuamos con la siguiente deuda
+          if (newRemainingAmount > 0) {
+            return processPayment(newRemainingAmount); // Llamada recursiva para la siguiente deuda
           }
         }
-      }
 
+        return amount - amountToUse;
+      };
+
+      // Iniciamos el proceso con la deuda especificada o buscando la más antigua
+      const finalRemainingAmount = await processPayment(
+        paymentData.nAmount,
+        idDebt,
+      );
+      console.log(
+        `Proceso de pago finalizado. Monto restante sin asignar: ${finalRemainingAmount}`,
+      );
+
+      // Actualizamos el balance del cliente
       const clientService = await this.clientService();
       await clientService.updateBalance(paymentData.idClient);
 
@@ -340,6 +396,40 @@ export class PaymentsService {
       }
       throw new HttpErrors.InternalServerError(
         `Error al crear el pago: ${error.message}`,
+      );
+    }
+  }
+
+  async cancelPayment({id, idEditor}: {id: string; idEditor: string}) {
+    try {
+      const payment = await this.paymentsRepository.findById(id);
+      if (!payment) {
+        throw new HttpErrors.NotFound('Pago no encontrado');
+      }
+
+      if (payment.sState === 'Anulado') {
+        throw new HttpErrors.BadRequest('El pago ya está anulado');
+      }
+
+      payment.sState = 'Anulado';
+      payment.idEditor = idEditor;
+      payment.dEdition = new Date().toISOString();
+      await this.paymentsRepository.updateById(id, payment);
+
+      const clientService = await this.clientService();
+      await clientService.updateBalance(payment.idClient);
+
+      return {
+        success: true,
+        message: 'Pago anulado correctamente',
+      };
+    } catch (error) {
+      console.error('Error en cancelPayment:', error);
+      if (error instanceof HttpErrors.HttpError) {
+        throw error;
+      }
+      throw new HttpErrors.InternalServerError(
+        `Error al cancelar el pago: ${error.message}`,
       );
     }
   }

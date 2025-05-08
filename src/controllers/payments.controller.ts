@@ -1,6 +1,6 @@
 import {authenticate} from '@loopback/authentication';
 import {inject} from '@loopback/core';
-import {get, param, post, requestBody, response} from '@loopback/rest';
+import {get, param, post, put, requestBody, response} from '@loopback/rest';
 import {Payments} from '../models';
 import {PaymentsService} from '../services';
 
@@ -49,5 +49,18 @@ export class PaymentsController {
     {payment, idDebt}: {payment: Partial<Payments>; idDebt?: string},
   ) {
     return this.paymentsService.createPayment(payment, idDebt);
+  }
+
+  @put('/payments/{id}/cancel')
+  @response(200, {
+    content: {
+      'application/json': {schema: {type: 'object'}},
+    },
+  })
+  async cancelPayment(
+    @param.path.string('id') id: string,
+    @requestBody() {idEditor}: {idEditor: string},
+  ) {
+    return this.paymentsService.cancelPayment({id, idEditor});
   }
 }
