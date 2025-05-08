@@ -182,4 +182,15 @@ export class ClientService {
       dEdition: new Date().toISOString(),
     });
   }
+
+  async withdrawClient(id: string, idEditor: string, idOwner?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(id, idOwner);
+
+    await this.clientsRepository.updateById(id, {
+      sState: 'Retirado',
+      idEditor: idEditor,
+      dEdition: new Date().toISOString(),
+    });
+  }
 }

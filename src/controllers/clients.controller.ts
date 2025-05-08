@@ -187,4 +187,28 @@ export class ClientsController {
   ) {
     return this.clientService.activateClient(id, client.idEditor, idOwner);
   }
+
+  @put('/clients/client/{id}/withdraw')
+  @response(200, {
+    description: 'Clients model instance',
+    content: {
+      'application/json': {
+        schema: getModelSchemaRef(Clients, {includeRelations: true}),
+      },
+    },
+  })
+  async updateWithdraw(
+    @param.path.string('id') id: string,
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: {type: 'object', properties: {idEditor: {type: 'string'}}},
+        },
+      },
+    })
+    client: {idEditor: string},
+    @param.query.string('idOwner', {required: false}) idOwner?: string,
+  ) {
+    return this.clientService.withdrawClient(id, client.idEditor, idOwner);
+  }
 }
