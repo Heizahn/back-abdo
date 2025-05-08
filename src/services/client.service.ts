@@ -158,4 +158,28 @@ export class ClientService {
       nBalance: parseFloat(totalDebt.toFixed(2)),
     });
   }
+
+  async suspendClient(id: string, idSuspender: string, idOwner?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(id, idOwner);
+
+    await this.clientsRepository.updateById(id, {
+      sState: 'Suspendido',
+      idSuspender,
+      dSuspension: new Date().toISOString(),
+      idEditor: idSuspender,
+      dEdition: new Date().toISOString(),
+    });
+  }
+
+  async activateClient(id: string, idEditor: string, idOwner?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(id, idOwner);
+
+    await this.clientsRepository.updateById(id, {
+      sState: 'Activo',
+      idEditor,
+      dEdition: new Date().toISOString(),
+    });
+  }
 }

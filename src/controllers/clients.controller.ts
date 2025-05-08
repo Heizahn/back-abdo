@@ -6,6 +6,7 @@ import {
   param,
   patch,
   post,
+  put,
   requestBody,
   response,
 } from '@loopback/rest';
@@ -136,37 +137,54 @@ export class ClientsController {
     return this.clientService.updateById(id, client);
   }
 
-  // @response(200, {
-  //   description: 'Clients model instance',
-  //   content: {
-  //     'application/json': {
-  //       schema: getModelSchemaRef(Clients, {includeRelations: true}),
-  //     },
-  //   },
-  // })
-  // async findById(
-  //   @param.path.string('id') id: string,
-  //   @param.filter(Clients, {exclude: 'where'})
-  //   filter?: FilterExcludingWhere<Clients>,
-  // ): Promise<Clients> {
-  //   return this.clientsRepository.findById(id, filter);
-  // }
+  @put('/clients/client/{id}/suspend')
+  @response(200, {
+    description: 'Clients model instance',
+    content: {
+      'application/json': {
+        schema: getModelSchemaRef(Clients, {includeRelations: true}),
+      },
+    },
+  })
+  async updateSuspended(
+    @param.path.string('id') id: string,
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            properties: {idSuspender: {type: 'string'}},
+          },
+        },
+      },
+    })
+    client: {idSuspender: string},
+    @param.query.string('idOwner', {required: false}) idOwner?: string,
+  ) {
+    return this.clientService.suspendClient(id, client.idSuspender, idOwner);
+  }
 
-  // @patch('/clients/{id}')
-  // @response(204, {
-  //   description: 'Clients PATCH success',
-  // })
-  // async updateById(
-  //   @param.path.string('id') id: string,
-  //   @requestBody({
-  //     content: {
-  //       'application/json': {
-  //         schema: getModelSchemaRef(Clients, {partial: true}),
-  //       },
-  //     },
-  //   })
-  //   clients: Clients,
-  // ): Promise<void> {
-  //   await this.clientsRepository.updateById(id, clients);
-  // }
+  @put('/clients/client/{id}/activate')
+  @response(200, {
+    description: 'Clients model instance',
+    content: {
+      'application/json': {
+        schema: getModelSchemaRef(Clients, {includeRelations: true}),
+      },
+    },
+  })
+  async updateActivated(
+    @param.path.string('id') id: string,
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: {type: 'object', properties: {idEditor: {type: 'string'}}},
+        },
+      },
+    })
+    client: {idEditor: string},
+    @param.query.string('idOwner', {required: false}) idOwner?: string,
+  ) {
+    return this.clientService.activateClient(id, client.idEditor, idOwner);
+  }
 }
