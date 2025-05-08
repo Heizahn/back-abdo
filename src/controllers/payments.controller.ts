@@ -74,4 +74,21 @@ export class PaymentsController {
   ) {
     return this.paymentsService.findTypePaymentsByClientId(id, idOwner);
   }
+
+  @get('/payments/list/simple')
+  @response(200, {
+    content: {
+      'application/json': {schema: {type: 'array'}},
+    },
+  })
+  async getPaymentsListSimple(@param.query.string('idOwner') idOwner?: string) {
+    return this.paymentsService.getPaymentsListSimple(idOwner);
+  }
+
+  @get('/payments/list/complete')
+  async getPaymentsListComplete(
+    @param.query.string('idOwner') idOwner?: string,
+  ) {
+    return this.paymentsService.getPaymentsListComplete(idOwner);
+  }
 }

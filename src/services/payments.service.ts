@@ -515,4 +515,421 @@ export class PaymentsService {
       ])
       .toArray();
   }
+
+  async getPaymentsListSimple(idOwner?: string) {
+    const pipeline: mongoose.PipelineStage[] = [];
+    if (idOwner) {
+      pipeline.push({
+        $match: {
+          idOwner: new mongoose.Types.ObjectId(idOwner),
+        },
+      });
+    }
+
+    pipeline.push(
+      {
+        $lookup: {
+          from: 'Clients',
+          localField: 'idClient',
+          foreignField: '_id',
+          as: 'client',
+        },
+      },
+      {
+        $sort: {
+          fecha: -1,
+        },
+      },
+      {$limit: 150},
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idEditor',
+          foreignField: '_id',
+          as: 'editor',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idCreator',
+          foreignField: '_id',
+          as: 'creator',
+        },
+      },
+      {
+        $lookup: {
+          from: 'PartPayments',
+          localField: '_id',
+          foreignField: 'idPayment',
+          as: 'partPayments',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Debts',
+          let: {
+            partPaymentDebtIds: '$partPayments.idDebt',
+            paymentState: '$sState',
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {$in: ['$_id', '$$partPaymentDebtIds']},
+                    {
+                      $or: [
+                        {$eq: ['$$paymentState', 'Anulado']},
+                        {$eq: ['$sState', 'Activo']},
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                sReason: 1,
+                sState: 1,
+              },
+            },
+          ],
+          as: 'relatedDebtsInfo',
+        },
+      },
+      {
+        $addFields: {
+          activeDebts: {
+            $filter: {
+              input: '$relatedDebtsInfo',
+              as: 'debt',
+              cond: {$eq: ['$$debt.sState', 'Activo']},
+            },
+          },
+          allDebts: '$relatedDebtsInfo',
+        },
+      },
+      {
+        $addFields: {
+          nAmount: '$nAmount',
+          nBs: '$nBs',
+          client: {
+            $last: '$client',
+          },
+          sReason: {
+            $cond: {
+              if: {$eq: ['$partPayments', []]},
+              then: {
+                $concat: [
+                  'Abono',
+                  {
+                    $cond: [{$eq: ['$sState', 'Anulado']}, ' (Anulado)', ''],
+                  },
+                ],
+              },
+              else: {
+                $cond: {
+                  if: {
+                    $and: [
+                      {$eq: ['$sState', 'Activo']},
+                      {$eq: ['$activeDebts', []]},
+                    ],
+                  },
+                  then: 'Abono',
+                  else: {
+                    $concat: [
+                      {
+                        $reduce: {
+                          input: {
+                            $cond: [
+                              {$gt: [{$size: '$activeDebts'}, 0]},
+                              '$activeDebts.sReason',
+                              '$allDebts.sReason',
+                            ],
+                          },
+                          initialValue: '',
+                          in: {
+                            $cond: {
+                              if: {$eq: ['$$value', '']},
+                              then: '$$this',
+                              else: {$concat: ['$$value', ', ', '$$this']},
+                            },
+                          },
+                        },
+                      },
+                      {
+                        $cond: [
+                          {$eq: ['$sState', 'Anulado']},
+                          ' (Anulado)',
+                          '',
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          sReference: {
+            $ifNull: [
+              {
+                $toString: '$sReference',
+              },
+              'na',
+            ],
+          },
+          creator: {
+            $last: '$creator.sName',
+          },
+          editor: {
+            $ifNull: [
+              {
+                $last: '$editor.sName',
+              },
+              '',
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          clientName: '$client.sName',
+          idClient: '$client._id',
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          nAmount: 1,
+          nBs: 1,
+          clientName: 1,
+          idClient: 1,
+          sReason: 1,
+          sReference: 1,
+          bCash: 1,
+          creator: 1,
+          editor: 1,
+          dCreation: 1,
+          dEdition: 1,
+          sState: 1,
+        },
+      },
+    );
+
+    return this.paymentsRepository.dataSource.connector
+      ?.collection('Payments')
+      .aggregate(pipeline)
+      .toArray();
+  }
+
+  async getPaymentsListComplete(idOwner?: string) {
+    const pipeline: mongoose.PipelineStage[] = [];
+    if (idOwner) {
+      pipeline.push({
+        $match: {
+          idOwner: new mongoose.Types.ObjectId(idOwner),
+        },
+      });
+    }
+
+    pipeline.push(
+      {
+        $lookup: {
+          from: 'Clients',
+          localField: 'idClient',
+          foreignField: '_id',
+          as: 'client',
+        },
+      },
+      {
+        $sort: {
+          fecha: -1,
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idEditor',
+          foreignField: '_id',
+          as: 'editor',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Users',
+          localField: 'idCreator',
+          foreignField: '_id',
+          as: 'creator',
+        },
+      },
+      {
+        $lookup: {
+          from: 'PartPayments',
+          localField: '_id',
+          foreignField: 'idPayment',
+          as: 'partPayments',
+        },
+      },
+      {
+        $lookup: {
+          from: 'Debts',
+          let: {
+            partPaymentDebtIds: '$partPayments.idDebt',
+            paymentState: '$sState',
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {$in: ['$_id', '$$partPaymentDebtIds']},
+                    {
+                      $or: [
+                        {$eq: ['$$paymentState', 'Anulado']},
+                        {$eq: ['$sState', 'Activo']},
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                sReason: 1,
+                sState: 1,
+              },
+            },
+          ],
+          as: 'relatedDebtsInfo',
+        },
+      },
+      {
+        $addFields: {
+          activeDebts: {
+            $filter: {
+              input: '$relatedDebtsInfo',
+              as: 'debt',
+              cond: {$eq: ['$$debt.sState', 'Activo']},
+            },
+          },
+          allDebts: '$relatedDebtsInfo',
+        },
+      },
+      {
+        $addFields: {
+          nAmount: '$nAmount',
+          nBs: '$nBs',
+          client: {
+            $last: '$client',
+          },
+          sReason: {
+            $cond: {
+              if: {$eq: ['$partPayments', []]},
+              then: {
+                $concat: [
+                  'Abono',
+                  {
+                    $cond: [{$eq: ['$sState', 'Anulado']}, ' (Anulado)', ''],
+                  },
+                ],
+              },
+              else: {
+                $cond: {
+                  if: {
+                    $and: [
+                      {$eq: ['$sState', 'Activo']},
+                      {$eq: ['$activeDebts', []]},
+                    ],
+                  },
+                  then: 'Abono',
+                  else: {
+                    $concat: [
+                      {
+                        $reduce: {
+                          input: {
+                            $cond: [
+                              {$gt: [{$size: '$activeDebts'}, 0]},
+                              '$activeDebts.sReason',
+                              '$allDebts.sReason',
+                            ],
+                          },
+                          initialValue: '',
+                          in: {
+                            $cond: {
+                              if: {$eq: ['$$value', '']},
+                              then: '$$this',
+                              else: {$concat: ['$$value', ', ', '$$this']},
+                            },
+                          },
+                        },
+                      },
+                      {
+                        $cond: [
+                          {$eq: ['$sState', 'Anulado']},
+                          ' (Anulado)',
+                          '',
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          sReference: {
+            $ifNull: [
+              {
+                $toString: '$sReference',
+              },
+              'na',
+            ],
+          },
+          creator: {
+            $last: '$creator.sName',
+          },
+          editor: {
+            $ifNull: [
+              {
+                $last: '$editor.sName',
+              },
+              '',
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          clientName: '$client.sName',
+          idClient: '$client._id',
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          nAmount: 1,
+          nBs: 1,
+          clientName: 1,
+          idClient: 1,
+          sReason: 1,
+          sReference: 1,
+          bCash: 1,
+          creator: 1,
+          editor: 1,
+          dCreation: 1,
+          dEdition: 1,
+          sState: 1,
+        },
+      },
+    );
+
+    return this.paymentsRepository.dataSource.connector
+      ?.collection('Payments')
+      .aggregate(pipeline)
+      .toArray();
+  }
 }
