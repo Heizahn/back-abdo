@@ -32,9 +32,9 @@ export class PlansService {
     const pipeline: mongoose.PipelineStage[] = [
       {
         $lookup: {
-          from: 'clients',
-          localField: 'idSubscription',
-          foreignField: '_id',
+          from: 'Clients',
+          localField: '_id',
+          foreignField: 'idSubscription',
           as: 'clients',
         },
       },

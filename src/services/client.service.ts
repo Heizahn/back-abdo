@@ -94,6 +94,7 @@ export class ClientService {
           nPayment: 1,
           nBalance: 1,
           sAddress: 1,
+          sGps: 1,
           sCommentary: 1,
           idSubscription: 1,
           idSector: 1,
