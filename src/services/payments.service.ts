@@ -104,6 +104,18 @@ export class PaymentsService {
         },
       },
       {
+        $addFields: {
+          activeDebts: {
+            $filter: {
+              input: '$relatedDebtsInfo',
+              as: 'debt',
+              cond: {$eq: ['$$debt.sState', 'Activo']},
+            },
+          },
+          allDebts: '$relatedDebtsInfo',
+        },
+      },
+      {
         $project: {
           _id: 0,
           id: '$_id',
@@ -125,24 +137,45 @@ export class PaymentsService {
                 ],
               },
               else: {
-                $concat: [
-                  {
-                    $reduce: {
-                      input: '$relatedDebtsInfo.sReason',
-                      initialValue: '',
-                      in: {
-                        $cond: {
-                          if: {$eq: ['$$value', '']},
-                          then: '$$this',
-                          else: {$concat: ['$$value', ', ', '$$this']},
+                $cond: {
+                  if: {
+                    $and: [
+                      {$eq: ['$sState', 'Activo']},
+                      {$eq: ['$activeDebts', []]},
+                    ],
+                  },
+                  then: 'Abono',
+                  else: {
+                    $concat: [
+                      {
+                        $reduce: {
+                          input: {
+                            $cond: [
+                              {$gt: [{$size: '$activeDebts'}, 0]},
+                              '$activeDebts.sReason',
+                              '$allDebts.sReason',
+                            ],
+                          },
+                          initialValue: '',
+                          in: {
+                            $cond: {
+                              if: {$eq: ['$$value', '']},
+                              then: '$$this',
+                              else: {$concat: ['$$value', ', ', '$$this']},
+                            },
+                          },
                         },
                       },
-                    },
+                      {
+                        $cond: [
+                          {$eq: ['$sState', 'Anulado']},
+                          ' (Anulado)',
+                          '',
+                        ],
+                      },
+                    ],
                   },
-                  {
-                    $cond: [{$eq: ['$sState', 'Anulado']}, ' (Anulado)', ''],
-                  },
-                ],
+                },
               },
             },
           },
