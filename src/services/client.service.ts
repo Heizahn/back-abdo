@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import {Clients} from '../models';
 import {ClientsRepository} from '../repositories';
 import {DebtsService} from './debts.service';
+import {UtilsService} from './utils.service';
 
 @injectable({scope: BindingScope.TRANSIENT})
 export class ClientService {
@@ -14,38 +15,18 @@ export class ClientService {
 
     @inject.getter('services.DebtsService')
     private debtsService: Getter<DebtsService>,
+
+    @inject.getter('services.UtilsService')
+    private utilsService: Getter<UtilsService>,
   ) {}
 
   async findById(id: string, providerId?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(id, providerId);
+
     const ObjectId = mongoose.Types.ObjectId;
     const collection =
       await this.clientsRepository.dataSource.connector?.collection('Clients');
-
-    if (!ObjectId.isValid(id)) {
-      throw new HttpErrors.BadRequest('Invalid client ID format');
-    }
-
-    const baseClient = (await collection.findOne(
-      {_id: new ObjectId(id)},
-      {projection: {idOwner: 1}},
-    )) as {
-      _id: mongoose.Types.ObjectId;
-      idOwner?: mongoose.Types.ObjectId | string;
-    } | null;
-
-    if (!baseClient) {
-      throw new HttpErrors.NotFound('Cliente no encontrado');
-    }
-
-    if (providerId) {
-      const dbProviderId = baseClient.idOwner
-        ? baseClient.idOwner.toString()
-        : undefined;
-
-      if (dbProviderId !== providerId) {
-        throw new HttpErrors.Forbidden('Acceso denegado a este cliente');
-      }
-    }
 
     const pipeline: mongoose.PipelineStage[] = [
       {$match: {_id: new ObjectId(id)}},
@@ -139,12 +120,9 @@ export class ClientService {
     return client[0];
   }
 
-  async updateById(id: string, client: Partial<Clients>) {
-    const ObjectId = mongoose.Types.ObjectId;
-
-    if (!ObjectId.isValid(id)) {
-      throw new HttpErrors.BadRequest('Identificador de cliente invalido');
-    }
+  async updateById(id: string, client: Partial<Clients>, providerId?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(id, providerId);
 
     await this.clientsRepository.updateById(id, client);
 

@@ -10,6 +10,7 @@ import mongoose from 'mongoose';
 import {Payments} from '../models/payments.model';
 import {PaymentsRepository} from '../repositories/payments.repository';
 import {ClientService} from './client.service';
+import {UtilsService} from './utils.service';
 
 interface PaymentWithAmount extends Omit<Payments, 'nAmount' | 'nBs'> {
   nAmount: number;
@@ -24,6 +25,9 @@ export class PaymentsService {
 
     @inject.getter('services.ClientService')
     private clientService: Getter<ClientService>,
+
+    @inject.getter('services.UtilsService')
+    private utilsService: Getter<UtilsService>,
   ) {}
 
   // Función auxiliar para redondear a 2 decimales
@@ -31,7 +35,10 @@ export class PaymentsService {
     return parseFloat(num.toFixed(2));
   }
 
-  async findByClientId(id: string) {
+  async findByClientId(id: string, idOwner?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(id, idOwner);
+
     const pipeline: mongoose.PipelineStage[] = [
       {
         $match: {
@@ -432,5 +439,47 @@ export class PaymentsService {
         `Error al cancelar el pago: ${error.message}`,
       );
     }
+  }
+
+  async findTypePaymentsByClientId(idClient: string, idOwner?: string) {
+    const utilsService = await this.utilsService();
+    await utilsService.validateClientAccess(idClient, idOwner);
+
+    const ObjectId = mongoose.Types.ObjectId;
+    const paymentsCollection =
+      this.paymentsRepository.dataSource.connector?.collection('Payments');
+
+    if (!paymentsCollection) {
+      throw new HttpErrors.InternalServerError(
+        'Error al conectar con la base de datos',
+      );
+    }
+
+    return paymentsCollection
+      .aggregate([
+        {
+          $match: {
+            idClient: new ObjectId(idClient),
+            sState: 'Activo',
+          },
+        },
+        {
+          $group: {
+            _id: {$cond: [{$eq: ['$bUSD', true]}, 'USD', 'VES']},
+            count: {
+              $sum: 1,
+            },
+            tipo: {
+              $last: {$cond: [{$eq: ['$bUSD', true]}, 'USD', 'VES']},
+            },
+          },
+        },
+        {
+          $sort: {
+            tipo: 1,
+          },
+        },
+      ])
+      .toArray();
   }
 }

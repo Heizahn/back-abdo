@@ -34,8 +34,11 @@ export class PaymentsController {
       },
     },
   })
-  async findByClientId(@param.path.string('id') id: string) {
-    return this.paymentsService.findByClientId(id);
+  async findByClientId(
+    @param.path.string('id') id: string,
+    @param.query.string('idOwner') idOwner?: string,
+  ) {
+    return this.paymentsService.findByClientId(id, idOwner);
   }
 
   @post('/payments')
@@ -62,5 +65,13 @@ export class PaymentsController {
     @requestBody() {idEditor}: {idEditor: string},
   ) {
     return this.paymentsService.cancelPayment({id, idEditor});
+  }
+
+  @get('/payments/client/{id}/types')
+  async findTypePaymentsByClientId(
+    @param.path.string('id') id: string,
+    @param.query.string('idOwner') idOwner?: string,
+  ) {
+    return this.paymentsService.findTypePaymentsByClientId(id, idOwner);
   }
 }
