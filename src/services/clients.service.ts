@@ -12,6 +12,11 @@ export class ClientsService {
     public clientsRepository: ClientsRepository,
   ) {}
 
+  // Función auxiliar para redondear a 2 decimales
+  private roundToTwoDecimals(num: number): number {
+    return parseFloat(num.toFixed(2));
+  }
+
   async create(client: Clients) {
     try {
       const newClient = await this.clientsRepository.create(client);
@@ -238,6 +243,7 @@ export class ClientsService {
               },
               nAmount: 1,
               nBs: 1,
+              sState: 1,
             },
           },
         ],
@@ -259,20 +265,62 @@ export class ClientsService {
             },
           },
           {
+            $lookup: {
+              from: 'PartPayments',
+              let: {
+                idDebt: '$_id',
+              },
+              as: 'partPayments',
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [{$eq: ['$idDebt', '$$idDebt']}],
+                    },
+                  },
+                },
+                {
+                  $lookup: {
+                    from: 'Payments',
+                    localField: 'idPayment',
+                    foreignField: '_id',
+                    as: 'payment',
+                  },
+                },
+                {
+                  $match: {
+                    'payment.sState': 'Activo',
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              debt: {
+                $cond: [
+                  {$eq: ['$sState', 'Activo']},
+                  {$subtract: ['$nAmount', {$sum: '$partPayments.nAmount'}]},
+                  0,
+                ],
+              },
+            },
+          },
+          {
             $sort: {dCreation: -1},
           },
           {
             $limit: 3,
           },
-          //Formatear el resultado
           {
             $project: {
               _id: 0,
               id: '$_id',
-              sReason: 1,
-              dCreation: 1,
               nAmount: 1,
+              sReason: 1,
               sState: 1,
+              debt: 1,
+              dCreation: 1,
             },
           },
         ],
@@ -311,6 +359,8 @@ export class ClientsService {
         plan: {$arrayElemAt: ['$plan.sName', 0]},
         nMBPS: {$arrayElemAt: ['$plan.nMBPS', 0]},
         nPayment: 1,
+        sAddress: 1,
+        sGps: 1,
         nBalance: 1,
         sState: 1,
         ultimosPagos: {
@@ -325,6 +375,7 @@ export class ClientsService {
               sReason: '$$pago.sReason',
               nAmount: {$toDouble: '$$pago.nAmount'},
               nBs: {$toDouble: '$$pago.nBs'},
+              sState: '$$pago.sState',
             },
           },
         },
